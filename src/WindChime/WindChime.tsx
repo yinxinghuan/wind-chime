@@ -1019,7 +1019,15 @@ export default function WindChime() {
       }
 
       // ── Striker (drawn AFTER chimes so it sits in front) ──────────────────
-      if (striker) drawStriker(ctx, striker);
+      // Pass the current horizontal wind force so the cord bows in the wind
+      // direction instead of looking like a rigid metal rod.
+      if (striker) {
+        const ambHoriz = (Math.sin(wind.phase * 0.7 + 4.2) * 0.14
+                        + Math.sin(wind.phase * 1.6 + 2.1) * 0.06)
+                        * (0.20 + wind.weather * 1.65);
+        const horizForce = ambHoriz + wind.gust * 0.7;
+        drawStriker(ctx, striker, horizForce);
+      }
 
       // ── Ripples (soft jade rings on contact points) ───────────────────────
       const ripples = ripplesRef.current;
@@ -1883,7 +1891,9 @@ function drawChime(
 // ── Striker rendering ────────────────────────────────────────────────────────
 // A walnut-stained wood disc on a thin cord, with a leaf-shaped wind catcher
 // hanging beneath. The disc is the visual anchor at the bottom of the chimes.
-function drawStriker(ctx: CanvasRenderingContext2D, s: Striker) {
+// `windForce` is a small signed scalar (~-1.5 to +1.5 during strong gusts);
+// positive bows the cord rightward, negative leftward.
+function drawStriker(ctx: CanvasRenderingContext2D, s: Striker, windForce = 0) {
   const sin = Math.sin(s.angle), cos = Math.cos(s.angle);
   const x1 = s.anchorX, y1 = s.anchorY;
   // Disc center (end of pendulum)
@@ -1893,21 +1903,39 @@ function drawStriker(ctx: CanvasRenderingContext2D, s: Striker) {
   const cx = dx + s.catcherL * sin;
   const cy = dy + s.catcherL * cos;
 
-  // Cord from beam to disc — fine charcoal
-  ctx.beginPath();
-  ctx.moveTo(x1, y1 - 4);
-  ctx.lineTo(dx, dy);
-  ctx.strokeStyle = 'rgba(20, 14, 8, 0.78)';
-  ctx.lineWidth = 0.85;
-  ctx.stroke();
+  // Helper — render a flexible cord from (ax,ay) to (bx,by) as a quadratic
+  // bezier whose midpoint is offset perpendicular to the line in the wind
+  // direction. Bow scales with cord length so longer cords visibly arc more.
+  const drawCord = (ax: number, ay: number, bx: number, by: number, force: number) => {
+    const ddx = bx - ax, ddy = by - ay;
+    const len = Math.hypot(ddx, ddy);
+    if (len < 2) {
+      // Too short to bow — straight line is fine
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.strokeStyle = 'rgba(20, 14, 8, 0.78)';
+      ctx.lineWidth = 0.85;
+      ctx.stroke();
+      return;
+    }
+    // Bow magnitude — proportional to wind force * length, capped so it
+    // never looks rubbery. Sign of `force` decides which side bulges.
+    // We push the bow always in the direction of horizontal wind, i.e.
+    // along the world-x axis, irrespective of the cord's tilt.
+    const bow = Math.max(-1, Math.min(1, force * 0.55)) * len * 0.10;
+    const midX = (ax + bx) / 2 + bow;          // bow in world-horizontal
+    const midY = (ay + by) / 2 + Math.abs(bow) * 0.18;  // tiny droop along with bow
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.quadraticCurveTo(midX, midY, bx, by);
+    ctx.strokeStyle = 'rgba(20, 14, 8, 0.78)';
+    ctx.lineWidth = 0.85;
+    ctx.stroke();
+  };
 
-  // Cord from disc to catcher
-  ctx.beginPath();
-  ctx.moveTo(dx, dy);
-  ctx.lineTo(cx, cy);
-  ctx.strokeStyle = 'rgba(20, 14, 8, 0.78)';
-  ctx.lineWidth = 0.85;
-  ctx.stroke();
+  drawCord(x1, y1 - 4, dx, dy, windForce);
+  drawCord(dx, dy, cx, cy, windForce * 0.6);    // shorter cord, less bow
 
   // Catcher — leaf shape (almond), drawn first so disc covers it where they meet
   ctx.save();
