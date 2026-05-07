@@ -22,20 +22,22 @@ const LEN_FRAC = [0.58, 0.54, 0.50, 0.46, 0.42, 0.39, 0.36];
 const TUBE_R = [13, 12, 11, 10.5, 10, 9.5, 9];
 
 const N = FREQS.length;
-// Pendulum tuning. The values below give the longest tube (L≈489px) a
-// natural period of ~2.8s and a damping ratio of ~0.11 — visibly oscillates
-// then settles in ~6–8 seconds, like a real metal chime. Wind in this
-// regime moves the tubes only 1–3° at ambient and 3–6° during gusts.
-const GRAVITY = 2500;                // px/s² equivalent — strong enough to return tubes from any tilt in <2s
-const DAMPING = 0.5;                 // per-second angular damping (under-damped)
-const TAP_IMPULSE = 1.0;             // initial angular velocity from a tap, rad/s — swings to ~25°
+// Pendulum tuning. The longest tube (L≈489px) has a natural period of ~7.4 s
+// and a damping ratio of ~0.18 — drifts noticeably in light wind, settles in
+// 5–6 seconds. Earlier values (GRAVITY=2500, DAMPING=0.5) made the chimes
+// feel heavy and "anchored"; earlier-earlier (GRAVITY=12) was airy but let
+// hard taps pile chimes against the MAX_ANGLE clamp for 30+ seconds. These
+// numbers are the airy-but-stable middle ground.
+const GRAVITY = 350;                 // px/s² equivalent — gentle restoring force, ~7 s natural period
+const DAMPING = 0.3;                 // per-second angular damping (under-damped, ζ ≈ 0.18)
+const TAP_IMPULSE = 0.65;            // graceful — swings to ~45°, well clear of MAX_ANGLE
 const COLLIDE_RESTITUTION = 0.55;
-const RING_VEL_THRESHOLD = 0.4;      // min closing velocity to ring (raised for the new faster physics)
+const RING_VEL_THRESHOLD = 0.18;     // back to lighter — soft contacts now ring softly
 const RING_COOLDOWN_MS = 110;        // a single chime can't ring more than this often
 const MAX_ANGLE = 0.95;              // ~54° — beyond this physics looks wrong + tubes overlap massively
 const COLLISION_GAP = 1.2;           // post-resolution separation in px to prevent re-touching
-const WIND_FORCE_SCALE = 0.9;        // multiplier on wind acceleration (chime), tuned with gravity above
-const STRIKER_WIND_SCALE = 0.76;     // striker catches more wind (leaf surface) but its mass is bigger
+const WIND_FORCE_SCALE = 0.45;       // multiplier on wind acceleration (chime) — restores feathery drift
+const STRIKER_WIND_SCALE = 0.38;     // striker catches more wind (leaf surface) but its mass is bigger
 
 interface Chime {
   anchorX: number;     // px, fixed; computed each frame from canvas size
