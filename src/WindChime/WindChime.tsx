@@ -34,12 +34,10 @@ const MAX_ANGLE = 0.95;              // ~54° — beyond this physics looks wron
 const COLLISION_GAP = 1.2;           // post-resolution separation in px to prevent re-touching
 const WIND_FORCE_SCALE = 0.40;       // multiplier on wind acceleration (chime) — restores feathery drift
 const STRIKER_WIND_SCALE = 0.34;     // striker catches more wind (leaf surface) but its mass is bigger
-// Glow trigger: instead of lighting up on collision (the original behavior),
-// the brass tubes now glint based on tilt angle — like real polished metal
-// catching the moonlight when its face is angled toward the light. Below
-// GLOW_THRESHOLD they're matte; above it the glint ramps quadratically.
-const GLOW_THRESHOLD = 0.20;         // ~11° tilt before any glint shows
-const GLOW_GAIN = 1.4;               // overall brightness multiplier on the quadratic ramp
+// Glow on strike — set to a velocity-derived value when a chime gets tapped
+// or hit by a neighbor, then exp-decays toward 0. (Earlier we tried tilt-
+// based glow but the threshold made it nearly invisible in practice.)
+const GLOW_DECAY = 1.6;              // per-second exponential decay rate
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THEMES
@@ -697,21 +695,9 @@ export default function WindChime() {
         // collision resolution stops working and tubes can stack up.
         if (c.angle > MAX_ANGLE) { c.angle = MAX_ANGLE; if (c.angVel > 0) c.angVel = 0; }
         if (c.angle < -MAX_ANGLE) { c.angle = -MAX_ANGLE; if (c.angVel < 0) c.angVel = 0; }
-        // Glow comes from tilt — the polished cylinder catches moonlight
-        // when its face turns toward the light. Quadratic ramp past a small
-        // threshold so resting tubes are matte. Brass only — ceramic/bamboo
-        // are matte materials and shouldn't fluoresce on swing.
-        if (themeRef.current === 'brass' || prevThemeRef.current === 'brass') {
-          const ang = Math.abs(c.angle);
-          if (ang < GLOW_THRESHOLD) {
-            c.glow = 0;
-          } else {
-            const k = (ang - GLOW_THRESHOLD) / (MAX_ANGLE - GLOW_THRESHOLD);
-            c.glow = Math.min(1, k * k * GLOW_GAIN);
-          }
-        } else {
-          c.glow = 0;
-        }
+        // Decay the on-strike glow — the actual flash is set by the tap
+        // handler and the collision-resolution code below.
+        c.glow = Math.max(0, c.glow - dt * GLOW_DECAY);
       }
 
       // Striker pendulum — same model, but longer + heavier so it swings
@@ -770,10 +756,12 @@ export default function WindChime() {
                 if (now - a.lastRingMs > RING_COOLDOWN_MS) {
                   ringBell(a.freq, vel * 0.85);
                   a.lastRingMs = now;
+                  a.glow = Math.max(a.glow, vel);
                 }
                 if (now - b.lastRingMs > RING_COOLDOWN_MS) {
                   ringBell(b.freq, vel * 0.85);
                   b.lastRingMs = now;
+                  b.glow = Math.max(b.glow, vel);
                 }
                 const rx = (ax + bx) / 2;
                 const ry = a.anchorY + Math.min(a.L, b.L) * Math.cos(a.angle) * 0.85;
@@ -1092,8 +1080,7 @@ export default function WindChime() {
       const sign = x < tipX ? +1 : -1;
       hit.angVel += sign * TAP_IMPULSE;
       hit.angVel = Math.max(-2.6, Math.min(2.6, hit.angVel));
-      // glow is no longer driven by tap — it now follows angle in the physics
-      // loop, so the natural swing creates the glint at peak tilt
+      hit.glow = 1;                            // bright flash on direct tap
       ringBell(hit.freq, 0.85);
       ripplesRef.current.push({ x, y, t: 0, r: 18, hue: 'jade' });
       return;
