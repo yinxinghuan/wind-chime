@@ -382,8 +382,8 @@ export default function WindChime() {
     // interrupted (they were already submitted to the AudioContext).
     const nextFreqs = THEMES[next].freqs;
     chimesRef.current.forEach((c) => { c.freq = nextFreqs[c.index]; });
-    // Crossfade ambient pads
-    fadeAmbientPads(next, 700);
+    // Swap to the new theme's ambient pad (fade old out + dispose, fade new in)
+    switchAmbientPad(next);
     setTheme(next);  // re-render so the switcher highlights correctly
   };
   // Wind = layered noise: a slow weather envelope (calm ↔ windy over ~80 s),
@@ -399,13 +399,12 @@ export default function WindChime() {
   const isPoster = typeof window !== 'undefined'
     && new URLSearchParams(window.location.search).get('poster') === '1';
 
-  // Audio — synthesized struck-bell tones + per-theme ambient pad drones.
-  // Lazy on first user gesture (browsers block AudioContext otherwise).
+  // Audio — synthesized struck-bell tones + a single chord-progressing
+  // ambient pad whose configuration depends on the active theme. Lazy on
+  // first user gesture (browsers block AudioContext otherwise).
   const audioCtxRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
-  // Each theme has its own ambient pad bus; we crossfade gain on theme switch.
-  // The pad oscillators run continuously after first activation.
-  const padGainsRef = useRef<{ [k in ThemeId]?: GainNode }>({});
+  const activePadRef = useRef<PadHandle | null>(null);
   function ensureAudio() {
     if (!audioCtxRef.current) {
       type WAC = typeof AudioContext;
@@ -419,36 +418,50 @@ export default function WindChime() {
       master.connect(ctx.destination);
       audioCtxRef.current = ctx;
       masterGainRef.current = master;
-      // Spin up the three ambient pads and stash their per-theme gain so
-      // we can fade them in/out without re-creating oscillators.
-      padGainsRef.current.brass   = startBrassPad(ctx, master);
-      padGainsRef.current.ceramic = startCeramicPad(ctx, master);
-      padGainsRef.current.bamboo  = startBambooPad(ctx, master);
-      // Initial state: only the active theme's pad is audible
-      const t0 = ctx.currentTime + 0.05;
-      for (const id of THEME_ORDER) {
-        const g = padGainsRef.current[id];
-        if (!g) continue;
-        g.gain.setValueAtTime(id === themeRef.current ? PAD_VOLUME : 0, t0);
-      }
+      // Start the pad for the currently selected theme. Switching themes
+      // disposes this and builds a new one for the new theme.
+      startPadFor(themeRef.current);
     }
     const ctx = audioCtxRef.current;
     if (ctx && ctx.state === 'suspended') void ctx.resume();
   }
-  // Crossfade pad gains on theme change (called from switchTheme)
-  function fadeAmbientPads(toId: ThemeId, durationMs = 700) {
+  // Build a pad for the given theme and fade it in. Caller is responsible
+  // for fading out + disposing any previous pad before calling this.
+  function buildPadFor(id: ThemeId): PadHandle | null {
+    const ctx = audioCtxRef.current;
+    const master = masterGainRef.current;
+    if (!ctx || !master) return null;
+    const opts = PAD_OPTS[id];
+    return buildPad(ctx, master, opts);
+  }
+  function startPadFor(id: ThemeId) {
     const ctx = audioCtxRef.current;
     if (!ctx) return;
+    const next = buildPadFor(id);
+    if (!next) return;
     const now = ctx.currentTime;
-    const dur = durationMs / 1000;
-    for (const id of THEME_ORDER) {
-      const g = padGainsRef.current[id];
-      if (!g) continue;
-      const target = id === toId ? PAD_VOLUME : 0;
-      g.gain.cancelScheduledValues(now);
-      g.gain.setValueAtTime(g.gain.value, now);
-      g.gain.linearRampToValueAtTime(target, now + dur);
+    next.gain.gain.setValueAtTime(0, now);
+    next.gain.gain.linearRampToValueAtTime(PAD_VOLUME, now + 0.9);
+    activePadRef.current = next;
+  }
+  // Theme switch: fade old pad out, schedule its disposal, then start the
+  // new theme's pad. Brief overlap is fine — both go through the same
+  // audio context master.
+  function switchAmbientPad(toId: ThemeId) {
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+    const old = activePadRef.current;
+    const now = ctx.currentTime;
+    if (old) {
+      old.gain.gain.cancelScheduledValues(now);
+      old.gain.gain.setValueAtTime(old.gain.gain.value, now);
+      old.gain.gain.linearRampToValueAtTime(0, now + 0.9);
+      // Cleanup after the fade finishes
+      const dispose = old.cleanup;
+      window.setTimeout(() => { dispose(); }, 1100);
     }
+    activePadRef.current = null;
+    startPadFor(toId);
   }
 
   // Bell synth — fundamental + 2 inharmonic overtones (2.41, 5.43) for a
@@ -1207,144 +1220,244 @@ export default function WindChime() {
 }
 
 // ── Ambient pads ─────────────────────────────────────────────────────────────
-// Quiet drone tracks — one per theme — running continuously while the audio
-// context is alive. Volume is very low (≤ ~12% of master) so it sits below
-// the chimes without competing. Each pad uses 2-3 detuned sine oscillators
-// passed through a gentle low-pass with slow LFO modulation on cutoff and
-// gain. Inspired by the synth atmospheres in moody web games.
-const PAD_VOLUME = 0.12;
+// Per-theme atmospheric backing track — slow chord progressions with each
+// voice independently breathing (gain LFO + tiny pitch detune drift), all
+// passed through a feedback-delay reverb network for cathedral-like space.
+// Each chord fades in 4 s → holds 8 s → fades out 4 s, with a new chord
+// starting every 12 s and overlapping the previous one's fade-out for
+// smooth harmonic motion.
 
-function startBrassPad(ctx: AudioContext, dst: AudioNode): GainNode {
-  // Brass / moonlit night — low Tibetan-bowl hum at G2 with a slow shimmer
-  const padGain = ctx.createGain();
-  padGain.gain.value = 0;
-  // Soft warm low-pass
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.frequency.value = 600;
-  lp.Q.value = 0.4;
-  padGain.connect(lp).connect(dst);
+const PAD_VOLUME = 0.16;
+const PAD_HOLD = 8;     // seconds at full chord volume
+const PAD_FADE = 4;     // seconds for each crossfade
+const PAD_CYCLE_MS = (PAD_HOLD + PAD_FADE) * 1000;
 
-  // Two detuned saws + one sine an octave up — open-fifth drone at G2
-  const fG2 = 98.0;
-  const fD3 = 146.83;
-  const layers = [
-    { type: 'sine' as OscillatorType, f: fG2 * 0.998, gain: 0.32 },
-    { type: 'sine' as OscillatorType, f: fG2 * 1.003, gain: 0.32 },
-    { type: 'sine' as OscillatorType, f: fD3,         gain: 0.18 },   // perfect fifth
-    { type: 'sine' as OscillatorType, f: fG2 * 2,     gain: 0.10 },   // octave shimmer
-  ];
-  for (const L of layers) {
-    const o = ctx.createOscillator();
-    o.type = L.type;
-    o.frequency.value = L.f;
-    const g = ctx.createGain();
-    g.gain.value = L.gain;
-    o.connect(g).connect(padGain);
-    o.start();
-  }
-  // Slow LFO on the lowpass cutoff for breathing
-  const lfo = ctx.createOscillator();
-  lfo.type = 'sine';
-  lfo.frequency.value = 0.07; // ~14 second cycle
-  const lfoG = ctx.createGain();
-  lfoG.gain.value = 180;       // ±180 Hz around the 600 Hz center
-  lfo.connect(lfoG).connect(lp.frequency);
-  lfo.start();
-  return padGain;
+interface PadHandle {
+  gain: GainNode;            // master pad volume — fade this in/out on switch
+  cleanup: () => void;       // stop all oscillators + intervals
 }
 
-function startCeramicPad(ctx: AudioContext, dst: AudioNode): GainNode {
-  // Ceramic / dusk — warmer mid-range pad in C#3 with very gentle vibrato
-  const padGain = ctx.createGain();
-  padGain.gain.value = 0;
+interface PadOpts {
+  chords: number[][];        // each chord is an array of frequencies (Hz)
+  lpFreq: number;            // lowpass cutoff for the bus
+  lpLfoCenter: number;       // LFO sweep center
+  lpLfoDepth: number;        // LFO sweep amplitude
+  lpLfoRate: number;         // LFO frequency (Hz) — should be very slow
+  voiceGain: number;         // base gain per voice
+  reverbWet: number;         // 0..1 wet mix
+  reverbFb: number;          // 0..1 feedback amount
+  hpFreq?: number;           // optional highpass before reverb (keep low rumble out)
+  noise?: { gain: number; bp: number; q: number };  // optional bandpass noise wash
+}
+
+// Build a per-theme atmospheric pad. Returns a PadHandle the caller can fade
+// in/out and ultimately dispose. Multiple pads CAN coexist briefly during a
+// theme crossfade; old pad cleanup happens after its master gain fades to 0.
+function buildPad(ctx: AudioContext, dst: AudioNode, opts: PadOpts): PadHandle {
+  const master = ctx.createGain();
+  master.gain.value = 0;
+  // Lowpass with slow LFO sweep
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
-  lp.frequency.value = 1100;
+  lp.frequency.value = opts.lpFreq;
   lp.Q.value = 0.5;
-  padGain.connect(lp).connect(dst);
-
-  // Open chord — root + minor third + fifth, slightly detuned
-  const f = 130.81; // C3
-  const layers = [
-    { f: f,        gain: 0.30 },
-    { f: f * 1.005, gain: 0.30 },
-    { f: f * 1.189, gain: 0.18 },  // ~minor 3rd (Eb)
-    { f: f * 1.498, gain: 0.20 },  // perfect 5th (G)
-    { f: f * 2.0,   gain: 0.08 },  // octave whisper
-  ];
-  for (const L of layers) {
-    const o = ctx.createOscillator();
-    o.type = 'sine';
-    o.frequency.value = L.f;
-    const g = ctx.createGain();
-    g.gain.value = L.gain;
-    o.connect(g).connect(padGain);
-    o.start();
+  // Optional highpass to keep DC/rumble out before reverb
+  let preReverb: AudioNode = lp;
+  if (opts.hpFreq) {
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = opts.hpFreq;
+    lp.connect(hp);
+    preReverb = hp;
   }
-  const lfo = ctx.createOscillator();
-  lfo.type = 'sine';
-  lfo.frequency.value = 0.10;
-  const lfoG = ctx.createGain();
-  lfoG.gain.value = 220;
-  lfo.connect(lfoG).connect(lp.frequency);
-  lfo.start();
-  return padGain;
+  // Reverb — feedback-delay network (2 delays cross-fed with lowpass'd loop)
+  const dry = ctx.createGain(); dry.gain.value = 1 - opts.reverbWet;
+  const wet = ctx.createGain(); wet.gain.value = opts.reverbWet;
+  const dly1 = ctx.createDelay(0.6); dly1.delayTime.value = 0.197;
+  const dly2 = ctx.createDelay(0.6); dly2.delayTime.value = 0.323;
+  const fb = ctx.createGain(); fb.gain.value = opts.reverbFb;
+  const dampLp = ctx.createBiquadFilter();
+  dampLp.type = 'lowpass'; dampLp.frequency.value = 2200; dampLp.Q.value = 0.4;
+  preReverb.connect(dry).connect(dst);
+  preReverb.connect(dly1);
+  dly1.connect(dly2);
+  dly2.connect(dampLp).connect(fb);
+  fb.connect(dly1);                         // feedback loop
+  dly1.connect(wet).connect(dst);
+  dly2.connect(wet);
+
+  master.connect(lp);
+
+  // LFO that sweeps the master lowpass cutoff
+  const lpLfo = ctx.createOscillator();
+  lpLfo.type = 'sine';
+  lpLfo.frequency.value = opts.lpLfoRate;
+  const lpLfoGain = ctx.createGain();
+  lpLfoGain.gain.value = opts.lpLfoDepth;
+  lpLfo.connect(lpLfoGain).connect(lp.frequency);
+  lpLfo.start();
+
+  // Optional shaped-noise bed (e.g. wind susurrus for the bamboo pad)
+  let noise: AudioBufferSourceNode | null = null;
+  if (opts.noise) {
+    const dur = 6;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * 0.5;
+    noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    noise.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = opts.noise.bp;
+    bp.Q.value = opts.noise.q;
+    const ng = ctx.createGain();
+    ng.gain.value = opts.noise.gain;
+    noise.connect(bp).connect(ng).connect(master);
+    noise.start();
+  }
+
+  // Track all live oscillators / nodes so we can stop them on cleanup.
+  type LiveNode = { osc: OscillatorNode; lfo?: OscillatorNode; chordGain: GainNode; stopAt: number };
+  const live: LiveNode[] = [];
+  let chordIdx = 0;
+
+  const playChord = (frequencies: number[]) => {
+    const start = ctx.currentTime;
+    const fadeIn  = start + PAD_FADE;
+    const peakEnd = fadeIn + PAD_HOLD;
+    const stop    = peakEnd + PAD_FADE + 0.3;
+
+    // Per-chord envelope
+    const chordGain = ctx.createGain();
+    chordGain.gain.setValueAtTime(0, start);
+    chordGain.gain.linearRampToValueAtTime(1, fadeIn);
+    chordGain.gain.setValueAtTime(1, peakEnd);
+    chordGain.gain.linearRampToValueAtTime(0, peakEnd + PAD_FADE);
+    chordGain.connect(master);
+
+    frequencies.forEach((f) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = f;
+      // Tiny static detune (±5 cents) for analog warmth
+      osc.detune.value = (Math.random() - 0.5) * 10;
+
+      const vGain = ctx.createGain();
+      const baseGain = opts.voiceGain * (0.65 + Math.random() * 0.55);
+      vGain.gain.value = baseGain;
+
+      // Per-voice slow gain LFO so the chord visibly breathes
+      const lfo = ctx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.value = 0.04 + Math.random() * 0.05; // 0.04–0.09 Hz (11-25 s)
+      const lfoG = ctx.createGain();
+      lfoG.gain.value = baseGain * 0.55;
+      lfo.connect(lfoG).connect(vGain.gain);
+      lfo.start(start);
+      lfo.stop(stop);
+
+      osc.connect(vGain).connect(chordGain);
+      osc.start(start);
+      osc.stop(stop);
+
+      live.push({ osc, lfo, chordGain, stopAt: stop });
+    });
+  };
+
+  // Kick off the first chord immediately, then a recurring scheduler that
+  // overlaps each new chord with the previous one's fade-out.
+  playChord(opts.chords[chordIdx]);
+  chordIdx = (chordIdx + 1) % opts.chords.length;
+  const cycleId = window.setInterval(() => {
+    playChord(opts.chords[chordIdx]);
+    chordIdx = (chordIdx + 1) % opts.chords.length;
+  }, PAD_CYCLE_MS);
+
+  // Periodically purge stopped voices from the live list (prevents leaks
+  // over long sessions).
+  const cleanupId = window.setInterval(() => {
+    const now = ctx.currentTime;
+    while (live.length && live[0].stopAt <= now) {
+      const dead = live.shift()!;
+      try { dead.chordGain.disconnect(); } catch { /* already gone */ }
+    }
+  }, 5000);
+
+  return {
+    gain: master,
+    cleanup: () => {
+      clearInterval(cycleId);
+      clearInterval(cleanupId);
+      // Hard-stop everything still alive
+      const now = ctx.currentTime;
+      try { lpLfo.stop(now + 0.5); } catch { /* */ }
+      if (noise) { try { noise.stop(now + 0.5); } catch { /* */ } }
+      for (const v of live) {
+        try { v.osc.stop(now + 0.6); } catch { /* */ }
+        if (v.lfo) { try { v.lfo.stop(now + 0.6); } catch { /* */ } }
+        v.chordGain.gain.cancelScheduledValues(now);
+        v.chordGain.gain.linearRampToValueAtTime(0, now + 0.4);
+      }
+    },
+  };
 }
 
-function startBambooPad(ctx: AudioContext, dst: AudioNode): GainNode {
-  // Bamboo / daytime — airy, brighter, with a touch of filtered pink-ish
-  // noise to suggest a soft daytime breeze.
-  const padGain = ctx.createGain();
-  padGain.gain.value = 0;
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.frequency.value = 1700;
-  lp.Q.value = 0.4;
-  padGain.connect(lp).connect(dst);
+// ── Per-theme chord progressions ────────────────────────────────────────────
+// All in G-minor pentatonic family so they remain consonant with the chime
+// pitches. Each chord is 4-5 voices spread across ~2 octaves.
 
-  // Higher chord — F3 + A3 (open major third) + C4 + the 5th high above
-  const layers = [
-    { f: 174.61, gain: 0.22 },  // F3
-    { f: 220.00, gain: 0.22 },  // A3
-    { f: 261.63, gain: 0.18 },  // C4
-    { f: 349.23 * 1.003, gain: 0.10 }, // F4 octave shimmer (slightly detuned)
-  ];
-  for (const L of layers) {
-    const o = ctx.createOscillator();
-    o.type = 'sine';
-    o.frequency.value = L.f;
-    const g = ctx.createGain();
-    g.gain.value = L.gain;
-    o.connect(g).connect(padGain);
-    o.start();
-  }
-  // Light filtered noise — wind susurrus
-  const noiseDur = 6; // 6-second loop
-  const buf = ctx.createBuffer(1, ctx.sampleRate * noiseDur, ctx.sampleRate);
-  const ch = buf.getChannelData(0);
-  for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * 0.5;
-  const noise = ctx.createBufferSource();
-  noise.buffer = buf;
-  noise.loop = true;
-  const noiseLp = ctx.createBiquadFilter();
-  noiseLp.type = 'bandpass';
-  noiseLp.frequency.value = 800;
-  noiseLp.Q.value = 0.7;
-  const ng = ctx.createGain();
-  ng.gain.value = 0.08;
-  noise.connect(noiseLp).connect(ng).connect(padGain);
-  noise.start();
-  // Slow LFO on cutoff
-  const lfo = ctx.createOscillator();
-  lfo.type = 'sine';
-  lfo.frequency.value = 0.13;
-  const lfoG = ctx.createGain();
-  lfoG.gain.value = 350;
-  lfo.connect(lfoG).connect(lp.frequency);
-  lfo.start();
-  return padGain;
-}
+// Brass — solemn, low, drifty (G minor)
+//   Gm9  →  EbMaj7  →  Cm  →  BbMaj
+const BRASS_CHORDS = [
+  [98.00, 146.83, 196.00, 233.08, 293.66],     // G2, D3, G3, Bb3, D4 (Gm + 9)
+  [77.78, 155.56, 196.00, 233.08, 311.13],     // Eb2, Eb3, G3, Bb3, Eb4 (EbMaj7)
+  [65.41, 130.81, 195.99, 233.08, 261.63],     // C2, C3, G3, Bb3, C4 (Cm/G)
+  [58.27, 116.54, 174.61, 233.08, 277.18],     // Bb1, Bb2, F3, Bb3, C#4 (Bb sus shimmer)
+];
+
+// Ceramic — warmer dusk, slightly major-flavored (Eb major area)
+//   AbMaj9  →  Eb6  →  Bbm9  →  Cm
+const CERAMIC_CHORDS = [
+  [103.83, 207.65, 311.13, 391.99, 466.16],    // Ab2, Ab3, Eb4, G4, Bb4 (AbMaj7)
+  [77.78, 155.56, 233.08, 311.13, 466.16],     // Eb2, Eb3, Bb3, Eb4, Bb4 (Eb6 voiced)
+  [58.27, 233.08, 277.18, 349.23, 466.16],     // Bb1, Bb3, C#4, F4, Bb4 (Bbm9)
+  [65.41, 155.56, 195.99, 261.63, 349.23],     // C2, Eb3, G3, C4, F4 (Cm + 11)
+];
+
+// Bamboo — bright daytime, modal F major / D dorian
+//   FMaj9  →  Dm7  →  BbMaj7  →  Csus2
+const BAMBOO_CHORDS = [
+  [87.31, 174.61, 261.63, 349.23, 440.00],     // F2, F3, C4, F4, A4 (FMaj)
+  [73.42, 146.83, 220.00, 261.63, 349.23],     // D2, D3, A3, C4, F4 (Dm7)
+  [58.27, 174.61, 233.08, 293.66, 349.23],     // Bb1, F3, Bb3, D4, F4 (BbMaj7)
+  [65.41, 196.00, 261.63, 293.66, 392.00],     // C2, G3, C4, D4, G4 (Csus2)
+];
+
+const PAD_OPTS: Record<ThemeId, PadOpts> = {
+  brass: {
+    chords: BRASS_CHORDS,
+    lpFreq: 700, lpLfoCenter: 700, lpLfoDepth: 280, lpLfoRate: 0.06,
+    voiceGain: 0.20,
+    reverbWet: 0.42, reverbFb: 0.55,
+    hpFreq: 50,
+  },
+  ceramic: {
+    chords: CERAMIC_CHORDS,
+    lpFreq: 1300, lpLfoCenter: 1300, lpLfoDepth: 420, lpLfoRate: 0.09,
+    voiceGain: 0.16,
+    reverbWet: 0.38, reverbFb: 0.50,
+    hpFreq: 60,
+  },
+  bamboo: {
+    chords: BAMBOO_CHORDS,
+    lpFreq: 1900, lpLfoCenter: 1900, lpLfoDepth: 600, lpLfoRate: 0.11,
+    voiceGain: 0.16,
+    reverbWet: 0.32, reverbFb: 0.42,
+    hpFreq: 70,
+    noise: { gain: 0.05, bp: 800, q: 0.7 },
+  },
+};
 
 // ── Audio synths per theme ───────────────────────────────────────────────────
 // Brass: 3 inharmonic sine partials (1.0, 2.41, 5.43) with long exp decay,
