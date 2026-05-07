@@ -45,3 +45,56 @@
   pointer-events: none;
   text-transform: lowercase;
 }
+
+// Top theme switcher — 3 glyphs side by side, each from a different script.
+// Active state: full opacity + tiny dot underneath. Inactive: ~30% opacity.
+.wc__switcher {
+  position: absolute;
+  top: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 26px;
+  align-items: center;
+  z-index: 5;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.wc__sw {
+  position: relative;
+  background: transparent;
+  border: 0;
+  padding: 6px 4px 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  outline: none;
+  font-weight: 300;
+  letter-spacing: 0;
+  // Color comes from inline style (theme-driven). 22px gives Arabic and
+  // Devanagari enough room while keeping CJK readable.
+  font-size: 22px;
+  line-height: 1;
+  transition: color 350ms ease, opacity 350ms ease;
+}
+
+.wc__sw--active {
+  // Tiny dot underneath the active glyph — color set via --wc-dot var inline
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--wc-dot, rgba(232, 238, 226, 0.7));
+    transition: background 350ms ease;
+  }
+}
+
+.wc__sw-glyph {
+  // Allow each glyph to use the per-button font set inline
+  display: inline-block;
+}
