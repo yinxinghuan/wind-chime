@@ -8,20 +8,16 @@ import './WindChime.less';
 // resonance and slow drifting mist.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Pentatonic G-minor across 1.5 octaves — every combination resolves softly.
-//                       G3      Bb3     C4      D4      F4      G4      Bb4
-const FREQS = [196.00, 233.08, 261.63, 293.66, 349.23, 392.00, 466.16];
+// Pentatonic G-minor pitch set — same scale across themes, but each theme
+// transposes it by an octave to match the natural range of the material:
+//   Bamboo  (deep hollow wood)  G2..Bb3   — 98..233 Hz
+//   Brass   (medium polished)   G3..Bb4   — 196..466 Hz
+//   Ceramic (small porcelain)   G4..Bb5   — 392..932 Hz
+const PENTA_BASE = [196.00, 233.08, 261.63, 293.66, 349.23, 392.00, 466.16]; // G3..Bb4
 
-// Lengths are inverse-square-root proportional to frequency for tubes-in-air,
-// but for *visual* pleasure we exaggerate: longest left, fanning shorter to
-// the right. Values are fractions of canvas height.
-const LEN_FRAC = [0.58, 0.54, 0.50, 0.46, 0.42, 0.39, 0.36];
+// 7 chimes, fixed across themes (so the switcher doesn't have to renumber).
+const CHIME_COUNT = PENTA_BASE.length;
 
-// Tube outer radius (half-width). Lower notes get fatter tubes — adds visual
-// hierarchy and matches reality (lower-pitched chimes are usually thicker).
-const TUBE_R = [13, 12, 11, 10.5, 10, 9.5, 9];
-
-const N = FREQS.length;
 // Pendulum tuning. The longest tube (L≈489px) has a natural period of ~9.4 s
 // (very slow, drifty) with damping ratio ζ≈0.14 — chimes oscillate clearly
 // then settle in ~9-10 seconds. Iteration: 12 (initial, stuck-at-clamp bug)
@@ -57,8 +53,16 @@ interface SkyStops { top: string; mid: string; bottom: string }
 
 interface ThemeConfig {
   id: ThemeId;
-  switchGlyph: string;                 // first character of the title script
-  switchFont: string;                  // CSS font-family for the switcher glyph
+  // Switcher icon — drawn as inline SVG path inside a frosted pill at the
+  // top of the screen. We use a time-of-day icon (moon / sunset / sun) so
+  // the user reads it intuitively rather than as a foreign letter.
+  iconSvgPath: string;                 // path data for a 24×24 viewBox
+  iconStyle: 'fill' | 'stroke';
+  // Pitch + shape — distinct per theme so each instrument feels physically
+  // different in addition to sounding different.
+  freqs: number[];                     // one frequency per chime (length CHIME_COUNT)
+  lenFrac: number[];                   // tube length as fraction of canvas height
+  tubeR: number[];                     // tube outer radius (half-width), px
   // Atmosphere
   sky: SkyStops;                       // 3-stop vertical gradient
   hasMoon: boolean;
@@ -96,8 +100,14 @@ const THEMES: Record<ThemeId, ThemeConfig> = {
   // ── BRASS — moonlit night, aged-brass tubes (the original) ─────────────────
   brass: {
     id: 'brass',
-    switchGlyph: '風',
-    switchFont: '"Noto Serif SC", "Cormorant Garamond", serif',
+    // Crescent moon — filled curve made by overlapping two arcs
+    iconSvgPath: 'M16.5 4a8 8 0 1 0 4 14.7A10 10 0 0 1 16.5 4z',
+    iconStyle: 'fill',
+    // G3..Bb4 — medium brass range (the original)
+    freqs: [...PENTA_BASE],
+    // Slim & tall — graceful metal cathedral feel
+    lenFrac: [0.58, 0.54, 0.50, 0.46, 0.42, 0.39, 0.36],
+    tubeR:   [13, 12, 11, 10.5, 10, 9.5, 9],
     sky: { top: '#0a141c', mid: '#162028', bottom: '#243038' },
     hasMoon: true, hasStars: true, hasMist: true,
     hasClouds: false, hasBambooLeaves: false, hasBirds: false,
@@ -137,8 +147,15 @@ const THEMES: Record<ThemeId, ThemeConfig> = {
   // ── CERAMIC — soft dusk, white porcelain with crackle ──────────────────────
   ceramic: {
     id: 'ceramic',
-    switchGlyph: 'ج',
-    switchFont: '"Noto Naskh Arabic", serif',
+    // Sun on horizon — half-circle with a horizontal line
+    iconSvgPath: 'M3 18h18M6 18a6 6 0 0 1 12 0',
+    iconStyle: 'stroke',
+    // G4..Bb5 — one octave UP from brass; porcelain doesn't ring at low
+    // frequencies (think small teacup tap, not a bell).
+    freqs: PENTA_BASE.map(f => f * 2),
+    // Short & stocky — porcelain wind chimes are squat, almost cup-shaped
+    lenFrac: [0.40, 0.38, 0.36, 0.34, 0.32, 0.30, 0.28],
+    tubeR:   [17, 16, 15, 14, 13.5, 13, 12.5],
     // Warm dusk: peach-pink top → muted lavender → deep dusty rose
     sky: { top: '#3a2a35', mid: '#7a5a5a', bottom: '#c08878' },
     hasMoon: false, hasStars: false, hasMist: true,
@@ -181,8 +198,15 @@ const THEMES: Record<ThemeId, ThemeConfig> = {
   // ── BAMBOO — bright daytime, hollow bamboo segments ────────────────────────
   bamboo: {
     id: 'bamboo',
-    switchGlyph: 'घ',
-    switchFont: '"Noto Serif Devanagari", serif',
+    // Sun with rays — circle + 8 short rays
+    iconSvgPath: 'M12 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12zM12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5',
+    iconStyle: 'stroke',
+    // G2..Bb3 — one octave DOWN from brass; long hollow bamboo gives a
+    // deep wooden thump (think suikinkutsu / shakuhachi register).
+    freqs: PENTA_BASE.map(f => f * 0.5),
+    // Long with a wide range — looks like asymmetric handcut bamboo
+    lenFrac: [0.62, 0.55, 0.49, 0.42, 0.36, 0.32, 0.28],
+    tubeR:   [16, 14.5, 13.5, 12.5, 11.5, 11, 10.5],
     // Daytime: pale powder blue → cream mid → soft jade-green at the floor
     sky: { top: '#9bb8c8', mid: '#c8d4cc', bottom: '#a8b888' },
     hasMoon: false, hasStars: false, hasMist: false,
@@ -274,14 +298,15 @@ function parseColor(c: string): [number, number, number, number] {
 }
 
 interface Chime {
+  index: number;       // position in the row (0..CHIME_COUNT-1) — used to look up per-theme L/r/freq
   anchorX: number;     // px, fixed; computed each frame from canvas size
   anchorY: number;
-  L: number;           // tube length, px (visual + pivot length to bottom tip)
-  r: number;           // tube radius
-  freq: number;
+  L: number;           // tube length, px (lerped each frame across theme switches)
+  r: number;           // tube radius (lerped each frame across theme switches)
+  freq: number;        // pitch — snapped to the new theme on switch (audio doesn't crossfade)
   angle: number;       // current swing angle, rad (0 = straight down)
   angVel: number;      // angular velocity, rad/s
-  glow: number;        // 0..1 brightness pulse decaying after a strike
+  glow: number;        // 0..1 — driven by tilt angle (brass only) for moonlight glint
   hueShift: number;    // tiny per-tube color jitter for variety (0..1)
   lastRingMs: number;  // performance.now() of the last ring — used for cooldown
   wasContactingRight: boolean; // edge-trigger: were we touching our right neighbor last frame?
@@ -358,6 +383,13 @@ export default function WindChime() {
     prevThemeRef.current = themeRef.current;
     themeRef.current = next;
     fadeStartMsRef.current = performance.now();
+    // Pitch snaps immediately — audio doesn't crossfade. The next bell to
+    // ring uses the new theme's frequency. Existing decaying tones are not
+    // interrupted (they were already submitted to the AudioContext).
+    const nextFreqs = THEMES[next].freqs;
+    chimesRef.current.forEach((c) => { c.freq = nextFreqs[c.index]; });
+    // Crossfade ambient pads
+    fadeAmbientPads(next, 700);
     setTheme(next);  // re-render so the switcher highlights correctly
   };
   // Wind = Perlin-ish low-frequency noise used as ambient angular impulse.
@@ -371,9 +403,13 @@ export default function WindChime() {
   const isPoster = typeof window !== 'undefined'
     && new URLSearchParams(window.location.search).get('poster') === '1';
 
-  // Audio — synthesized struck-bell tones. Lazy on first user gesture.
+  // Audio — synthesized struck-bell tones + per-theme ambient pad drones.
+  // Lazy on first user gesture (browsers block AudioContext otherwise).
   const audioCtxRef = useRef<AudioContext | null>(null);
   const masterGainRef = useRef<GainNode | null>(null);
+  // Each theme has its own ambient pad bus; we crossfade gain on theme switch.
+  // The pad oscillators run continuously after first activation.
+  const padGainsRef = useRef<{ [k in ThemeId]?: GainNode }>({});
   function ensureAudio() {
     if (!audioCtxRef.current) {
       type WAC = typeof AudioContext;
@@ -384,13 +420,39 @@ export default function WindChime() {
       const ctx = new Ctor();
       const master = ctx.createGain();
       master.gain.value = 0.55;
-      // Soft master compression-ish lowpass so multiple bells layer well
       master.connect(ctx.destination);
       audioCtxRef.current = ctx;
       masterGainRef.current = master;
+      // Spin up the three ambient pads and stash their per-theme gain so
+      // we can fade them in/out without re-creating oscillators.
+      padGainsRef.current.brass   = startBrassPad(ctx, master);
+      padGainsRef.current.ceramic = startCeramicPad(ctx, master);
+      padGainsRef.current.bamboo  = startBambooPad(ctx, master);
+      // Initial state: only the active theme's pad is audible
+      const t0 = ctx.currentTime + 0.05;
+      for (const id of THEME_ORDER) {
+        const g = padGainsRef.current[id];
+        if (!g) continue;
+        g.gain.setValueAtTime(id === themeRef.current ? PAD_VOLUME : 0, t0);
+      }
     }
     const ctx = audioCtxRef.current;
     if (ctx && ctx.state === 'suspended') void ctx.resume();
+  }
+  // Crossfade pad gains on theme change (called from switchTheme)
+  function fadeAmbientPads(toId: ThemeId, durationMs = 700) {
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const dur = durationMs / 1000;
+    for (const id of THEME_ORDER) {
+      const g = padGainsRef.current[id];
+      if (!g) continue;
+      const target = id === toId ? PAD_VOLUME : 0;
+      g.gain.cancelScheduledValues(now);
+      g.gain.setValueAtTime(g.gain.value, now);
+      g.gain.linearRampToValueAtTime(target, now + dur);
+    }
   }
 
   // Bell synth — fundamental + 2 inharmonic overtones (2.41, 5.43) for a
@@ -414,15 +476,17 @@ export default function WindChime() {
       // its own real estate in the upper-left without crowding the tubes.
       const span = w * 0.66;
       const left = w * 0.22;
+      const startTheme = THEMES[themeRef.current];
       const arr: Chime[] = [];
-      for (let i = 0; i < N; i++) {
-        const t = N === 1 ? 0.5 : i / (N - 1);
+      for (let i = 0; i < CHIME_COUNT; i++) {
+        const t = CHIME_COUNT === 1 ? 0.5 : i / (CHIME_COUNT - 1);
         arr.push({
+          index: i,
           anchorX: left + span * t,
           anchorY: beamY + 8,
-          L: h * LEN_FRAC[i],
-          r: TUBE_R[i],
-          freq: FREQS[i],
+          L: h * startTheme.lenFrac[i],
+          r: startTheme.tubeR[i],
+          freq: startTheme.freqs[i],
           angle: 0,
           angVel: 0,
           glow: 0,
@@ -433,15 +497,13 @@ export default function WindChime() {
       }
       chimesRef.current = arr;
 
-      // Striker: hangs from the center of the chime cluster, just past the
-      // longest tube. It's a wooden disc + leaf-shaped wind catcher — the
-      // visual anchor of the composition. The string passes between adjacent
-      // chimes (we offset slightly so it doesn't sit right on top of one).
+      // Striker: anchored to the center of the cluster, length tracks the
+      // longest chime in the active theme. Updated each frame too so the
+      // striker stays past the bottom of the longest tube during transitions.
       const longest = Math.max(...arr.map(c => c.L));
       const clusterCx = left + span / 2;
       strikerRef.current = {
-        // Offset half a chime spacing so the striker hangs BETWEEN tubes
-        anchorX: clusterCx + (span / (N - 1)) * 0.5,
+        anchorX: clusterCx + (span / (CHIME_COUNT - 1)) * 0.5,
         anchorY: beamY + 8,
         L: longest + 22,
         catcherL: 44,
@@ -574,6 +636,24 @@ export default function WindChime() {
         wind.gustUntil = now + 900 + Math.random() * 1400;
       }
       if (now > wind.gustUntil) wind.gust *= Math.pow(0.5, dt * 2.2);
+
+      // ── Update tube shape (length, radius) — lerped across theme fade ─────
+      // Compute the active fade so we can update L/r before physics uses them.
+      const _fadeStartCheck = fadeStartMsRef.current;
+      const _fadeT = _fadeStartCheck === 0 ? 1 : Math.min(1, (now - _fadeStartCheck) / THEME_FADE_MS);
+      const tPrev = THEMES[prevThemeRef.current];
+      const tCurr = THEMES[themeRef.current];
+      const { h: cH } = sizeRef.current;
+      for (const c of chimes) {
+        const i = c.index;
+        const lP = tPrev.lenFrac[i] * cH, lC = tCurr.lenFrac[i] * cH;
+        const rP = tPrev.tubeR[i],         rC = tCurr.tubeR[i];
+        c.L = _fadeT >= 1 ? lC : lP + (lC - lP) * _fadeT;
+        c.r = _fadeT >= 1 ? rC : rP + (rC - rP) * _fadeT;
+      }
+      // Striker length tracks the longest chime so it stays just below it
+      const _maxL = Math.max(...chimes.map(c => c.L));
+      if (strikerRef.current) strikerRef.current.L = _maxL + 22;
 
       // ── Physics: each chime is a simple pendulum ──────────────────────────
       for (let i = 0; i < chimes.length; i++) {
@@ -1063,42 +1143,186 @@ export default function WindChime() {
         className="wc__canvas"
         onPointerDown={onPointerDown}
       />
-      {!isPoster && (() => {
-        const tc = THEMES[theme].textColor;
-        const dotColor = `rgba(${tc.r}, ${tc.g}, ${tc.b}, 0.78)`;
-        return (
-          <div className="wc__switcher">
-            {THEME_ORDER.map(id => {
-              const cfg = THEMES[id];
-              const isActive = theme === id;
-              const color = isActive
-                ? `rgba(${tc.r}, ${tc.g}, ${tc.b}, 0.92)`
-                : `rgba(${tc.r}, ${tc.g}, ${tc.b}, 0.36)`;
-              return (
-                <button
-                  key={id}
-                  className={`wc__sw ${isActive ? 'wc__sw--active' : ''}`}
-                  onPointerDown={(e) => { e.stopPropagation(); ensureAudio(); switchTheme(id); }}
-                  aria-label={cfg.id}
-                  style={{
-                    fontFamily: cfg.switchFont,
-                    color,
-                    ['--wc-dot' as string]: dotColor,
-                  }}
+      {!isPoster && (
+        <div className="wc__switcher">
+          {THEME_ORDER.map(id => {
+            const cfg = THEMES[id];
+            const isActive = theme === id;
+            return (
+              <button
+                key={id}
+                className={`wc__sw ${isActive ? 'wc__sw--active' : ''}`}
+                onPointerDown={(e) => { e.stopPropagation(); ensureAudio(); switchTheme(id); }}
+                onClick={(e) => { e.stopPropagation(); ensureAudio(); switchTheme(id); }}
+                aria-label={`${cfg.id} theme`}
+              >
+                <svg
+                  className="wc__sw-icon"
+                  viewBox="0 0 24 24"
+                  width="22"
+                  height="22"
+                  aria-hidden="true"
                 >
-                  <span className="wc__sw-glyph">{cfg.switchGlyph}</span>
-                </button>
-              );
-            })}
-          </div>
-        );
-      })()}
+                  <path
+                    d={cfg.iconSvgPath}
+                    fill={cfg.iconStyle === 'fill' ? 'currentColor' : 'none'}
+                    stroke={cfg.iconStyle === 'stroke' ? 'currentColor' : 'none'}
+                    strokeWidth={cfg.iconStyle === 'stroke' ? 1.5 : 0}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            );
+          })}
+        </div>
+      )}
       {!hasTouched && !isPoster && (
         <div className="wc__hint">tap a chime · breathe</div>
       )}
       {!isPoster && <div className="wc__brand">courtyard study</div>}
     </div>
   );
+}
+
+// ── Ambient pads ─────────────────────────────────────────────────────────────
+// Quiet drone tracks — one per theme — running continuously while the audio
+// context is alive. Volume is very low (≤ ~12% of master) so it sits below
+// the chimes without competing. Each pad uses 2-3 detuned sine oscillators
+// passed through a gentle low-pass with slow LFO modulation on cutoff and
+// gain. Inspired by the synth atmospheres in moody web games.
+const PAD_VOLUME = 0.12;
+
+function startBrassPad(ctx: AudioContext, dst: AudioNode): GainNode {
+  // Brass / moonlit night — low Tibetan-bowl hum at G2 with a slow shimmer
+  const padGain = ctx.createGain();
+  padGain.gain.value = 0;
+  // Soft warm low-pass
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 600;
+  lp.Q.value = 0.4;
+  padGain.connect(lp).connect(dst);
+
+  // Two detuned saws + one sine an octave up — open-fifth drone at G2
+  const fG2 = 98.0;
+  const fD3 = 146.83;
+  const layers = [
+    { type: 'sine' as OscillatorType, f: fG2 * 0.998, gain: 0.32 },
+    { type: 'sine' as OscillatorType, f: fG2 * 1.003, gain: 0.32 },
+    { type: 'sine' as OscillatorType, f: fD3,         gain: 0.18 },   // perfect fifth
+    { type: 'sine' as OscillatorType, f: fG2 * 2,     gain: 0.10 },   // octave shimmer
+  ];
+  for (const L of layers) {
+    const o = ctx.createOscillator();
+    o.type = L.type;
+    o.frequency.value = L.f;
+    const g = ctx.createGain();
+    g.gain.value = L.gain;
+    o.connect(g).connect(padGain);
+    o.start();
+  }
+  // Slow LFO on the lowpass cutoff for breathing
+  const lfo = ctx.createOscillator();
+  lfo.type = 'sine';
+  lfo.frequency.value = 0.07; // ~14 second cycle
+  const lfoG = ctx.createGain();
+  lfoG.gain.value = 180;       // ±180 Hz around the 600 Hz center
+  lfo.connect(lfoG).connect(lp.frequency);
+  lfo.start();
+  return padGain;
+}
+
+function startCeramicPad(ctx: AudioContext, dst: AudioNode): GainNode {
+  // Ceramic / dusk — warmer mid-range pad in C#3 with very gentle vibrato
+  const padGain = ctx.createGain();
+  padGain.gain.value = 0;
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 1100;
+  lp.Q.value = 0.5;
+  padGain.connect(lp).connect(dst);
+
+  // Open chord — root + minor third + fifth, slightly detuned
+  const f = 130.81; // C3
+  const layers = [
+    { f: f,        gain: 0.30 },
+    { f: f * 1.005, gain: 0.30 },
+    { f: f * 1.189, gain: 0.18 },  // ~minor 3rd (Eb)
+    { f: f * 1.498, gain: 0.20 },  // perfect 5th (G)
+    { f: f * 2.0,   gain: 0.08 },  // octave whisper
+  ];
+  for (const L of layers) {
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = L.f;
+    const g = ctx.createGain();
+    g.gain.value = L.gain;
+    o.connect(g).connect(padGain);
+    o.start();
+  }
+  const lfo = ctx.createOscillator();
+  lfo.type = 'sine';
+  lfo.frequency.value = 0.10;
+  const lfoG = ctx.createGain();
+  lfoG.gain.value = 220;
+  lfo.connect(lfoG).connect(lp.frequency);
+  lfo.start();
+  return padGain;
+}
+
+function startBambooPad(ctx: AudioContext, dst: AudioNode): GainNode {
+  // Bamboo / daytime — airy, brighter, with a touch of filtered pink-ish
+  // noise to suggest a soft daytime breeze.
+  const padGain = ctx.createGain();
+  padGain.gain.value = 0;
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 1700;
+  lp.Q.value = 0.4;
+  padGain.connect(lp).connect(dst);
+
+  // Higher chord — F3 + A3 (open major third) + C4 + the 5th high above
+  const layers = [
+    { f: 174.61, gain: 0.22 },  // F3
+    { f: 220.00, gain: 0.22 },  // A3
+    { f: 261.63, gain: 0.18 },  // C4
+    { f: 349.23 * 1.003, gain: 0.10 }, // F4 octave shimmer (slightly detuned)
+  ];
+  for (const L of layers) {
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = L.f;
+    const g = ctx.createGain();
+    g.gain.value = L.gain;
+    o.connect(g).connect(padGain);
+    o.start();
+  }
+  // Light filtered noise — wind susurrus
+  const noiseDur = 6; // 6-second loop
+  const buf = ctx.createBuffer(1, ctx.sampleRate * noiseDur, ctx.sampleRate);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * 0.5;
+  const noise = ctx.createBufferSource();
+  noise.buffer = buf;
+  noise.loop = true;
+  const noiseLp = ctx.createBiquadFilter();
+  noiseLp.type = 'bandpass';
+  noiseLp.frequency.value = 800;
+  noiseLp.Q.value = 0.7;
+  const ng = ctx.createGain();
+  ng.gain.value = 0.08;
+  noise.connect(noiseLp).connect(ng).connect(padGain);
+  noise.start();
+  // Slow LFO on cutoff
+  const lfo = ctx.createOscillator();
+  lfo.type = 'sine';
+  lfo.frequency.value = 0.13;
+  const lfoG = ctx.createGain();
+  lfoG.gain.value = 350;
+  lfo.connect(lfoG).connect(lp.frequency);
+  lfo.start();
+  return padGain;
 }
 
 // ── Audio synths per theme ───────────────────────────────────────────────────
@@ -1143,88 +1367,103 @@ function ringBrass(ctx: AudioContext, out: AudioNode, freq: number, vel: number)
   noise.start(now);
 }
 
-// Ceramic: short single-pitch sine + small near-harmonic for "tink" character,
-// with a sharp attack click. Decay ~0.8s. No prolonged metallic tail.
+// Ceramic: high-pitched porcelain "ting". Single sine fundamental with a
+// short bright burst, a 4.1x glass-shimmer overtone, and a very sharp
+// attack click. Decay ~0.45s — like a teacup struck with a chopstick.
 function ringCeramic(ctx: AudioContext, out: AudioNode, freq: number, vel: number) {
   const v = Math.max(0.05, Math.min(1, vel));
   const now = ctx.currentTime;
   const bus = ctx.createGain();
-  bus.gain.value = 0.42 + v * 0.55;
+  bus.gain.value = 0.40 + v * 0.45;
   bus.connect(out);
-  // Fundamental + slight 3.0x partial (close to harmonic — porcelain rings
-  // mostly at fundamental with a glassy upper sparkle)
-  const fundamentalDecay = 0.85;
-  const upperDecay = 0.32;
+  // Fundamental — short, no detune so it stays "clean"
+  const fundDecay = 0.55;
   const fund = ctx.createOscillator();
   fund.type = 'sine';
-  fund.frequency.value = freq * 1.005;       // tiny detune for warmth
+  fund.frequency.value = freq;
   const fg = ctx.createGain();
   fg.gain.setValueAtTime(0, now);
-  fg.gain.linearRampToValueAtTime(0.62, now + 0.003);
-  fg.gain.exponentialRampToValueAtTime(0.0001, now + fundamentalDecay);
+  fg.gain.linearRampToValueAtTime(0.52, now + 0.002);
+  fg.gain.exponentialRampToValueAtTime(0.0001, now + fundDecay);
   fund.connect(fg).connect(bus);
-  fund.start(now); fund.stop(now + fundamentalDecay + 0.05);
+  fund.start(now); fund.stop(now + fundDecay + 0.05);
+  // Glass-shimmer overtone (4.1x — slight inharmonic for sparkle)
+  const upperDecay = 0.18;
   const upper = ctx.createOscillator();
   upper.type = 'sine';
-  upper.frequency.value = freq * 3.02;
+  upper.frequency.value = freq * 4.1;
   const ug = ctx.createGain();
   ug.gain.setValueAtTime(0, now);
-  ug.gain.linearRampToValueAtTime(0.18 * v, now + 0.003);
+  ug.gain.linearRampToValueAtTime(0.22 * v, now + 0.001);
   ug.gain.exponentialRampToValueAtTime(0.0001, now + upperDecay);
   upper.connect(ug).connect(bus);
   upper.start(now); upper.stop(now + upperDecay + 0.05);
-  // Sharp attack click — band-passed noise burst
-  const noiseDur = 0.04;
+  // Sharp band-passed noise click — the porcelain-on-porcelain contact
+  const noiseDur = 0.025;
   const buf = ctx.createBuffer(1, ctx.sampleRate * noiseDur, ctx.sampleRate);
   const ch = buf.getChannelData(0);
-  for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / ch.length, 3);
+  for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / ch.length, 4);
   const noise = ctx.createBufferSource();
   noise.buffer = buf;
   const bp = ctx.createBiquadFilter();
   bp.type = 'bandpass';
-  bp.frequency.value = freq * 4;
-  bp.Q.value = 1.2;
+  bp.frequency.value = Math.min(8000, freq * 5);
+  bp.Q.value = 2.5;
   const ng = ctx.createGain();
-  ng.gain.value = 0.18 * v;
+  ng.gain.value = 0.28 * v;
   noise.connect(bp).connect(ng).connect(bus);
   noise.start(now);
 }
 
-// Bamboo: hollow wood resonance — fundamental sine with mild 2nd harmonic and
-// a gentle low-pass attack. Decay ~1.5s. Like a Japanese suikinkutsu drop.
+// Bamboo: deep hollow wood "ko". Sub-octave thump under a soft fundamental,
+// strong low-pass shaping for the woody timbre, ~2 s decay. Think
+// suikinkutsu / wood-block temple chime.
 function ringBamboo(ctx: AudioContext, out: AudioNode, freq: number, vel: number) {
   const v = Math.max(0.05, Math.min(1, vel));
   const now = ctx.currentTime;
   const bus = ctx.createGain();
-  bus.gain.value = 0.50 + v * 0.45;
-  // Soft low-pass filter on the bus shapes the wood timbre
+  bus.gain.value = 0.55 + v * 0.40;
+  // Heavy low-pass — bamboo has very little high-frequency content
   const lp = ctx.createBiquadFilter();
   lp.type = 'lowpass';
-  lp.frequency.value = freq * 6;
-  lp.Q.value = 0.8;
+  lp.frequency.value = freq * 5;
+  lp.Q.value = 0.6;
   bus.connect(lp).connect(out);
-  // Fundamental — gentler attack than brass
+  // Sub-octave thump — the body resonance of the hollow tube
+  const subDecay = 0.6;
+  const sub = ctx.createOscillator();
+  sub.type = 'sine';
+  sub.frequency.value = freq * 0.5;
+  const sg0 = ctx.createGain();
+  sg0.gain.setValueAtTime(0, now);
+  sg0.gain.linearRampToValueAtTime(0.35 * v, now + 0.018);
+  sg0.gain.exponentialRampToValueAtTime(0.0001, now + subDecay);
+  sub.connect(sg0).connect(bus);
+  sub.start(now); sub.stop(now + subDecay + 0.05);
+  // Fundamental — soft attack, longer body
+  const fundDecay = 1.9;
   const fund = ctx.createOscillator();
   fund.type = 'sine';
   fund.frequency.value = freq * 0.998;
   const fg = ctx.createGain();
   fg.gain.setValueAtTime(0, now);
-  fg.gain.linearRampToValueAtTime(0.55, now + 0.012);
-  fg.gain.exponentialRampToValueAtTime(0.0001, now + 1.6);
+  fg.gain.linearRampToValueAtTime(0.6, now + 0.018);
+  fg.gain.exponentialRampToValueAtTime(0.0001, now + fundDecay);
   fund.connect(fg).connect(bus);
-  fund.start(now); fund.stop(now + 1.65);
-  // 2nd harmonic — dampens the metallic edge, adds woody body
+  fund.start(now); fund.stop(now + fundDecay + 0.05);
+  // Mild 2nd-harmonic body resonance
+  const secondDecay = 0.5;
   const second = ctx.createOscillator();
   second.type = 'sine';
-  second.frequency.value = freq * 2.005;
+  second.frequency.value = freq * 2.003;
   const sg = ctx.createGain();
   sg.gain.setValueAtTime(0, now);
-  sg.gain.linearRampToValueAtTime(0.18 * v, now + 0.012);
-  sg.gain.exponentialRampToValueAtTime(0.0001, now + 0.8);
+  sg.gain.linearRampToValueAtTime(0.12 * v, now + 0.020);
+  sg.gain.exponentialRampToValueAtTime(0.0001, now + secondDecay);
   second.connect(sg).connect(bus);
-  second.start(now); second.stop(now + 0.85);
-  // Soft thump on attack — a low filtered noise burst (the "ko" sound)
-  const thumpDur = 0.10;
+  second.start(now); second.stop(now + secondDecay + 0.05);
+  // Wood thump on attack — strong low-pass, longer than ceramic's click
+  const thumpDur = 0.14;
   const buf = ctx.createBuffer(1, ctx.sampleRate * thumpDur, ctx.sampleRate);
   const ch = buf.getChannelData(0);
   for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / ch.length, 2);
@@ -1232,9 +1471,9 @@ function ringBamboo(ctx: AudioContext, out: AudioNode, freq: number, vel: number
   noise.buffer = buf;
   const lp2 = ctx.createBiquadFilter();
   lp2.type = 'lowpass';
-  lp2.frequency.value = freq * 1.5;
+  lp2.frequency.value = freq * 1.2;
   const ng = ctx.createGain();
-  ng.gain.value = 0.10 * v;
+  ng.gain.value = 0.16 * v;
   noise.connect(lp2).connect(ng).connect(bus);
   noise.start(now);
 }

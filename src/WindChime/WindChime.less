@@ -46,16 +46,23 @@
   text-transform: lowercase;
 }
 
-// Top theme switcher — 3 glyphs side by side, each from a different script.
-// Active state: full opacity + tiny dot underneath. Inactive: ~30% opacity.
+// Top theme switcher — 3 time-of-day icons (moon / sunset / sun) in a
+// frosted-glass pill so it stays legible regardless of sky color.
 .wc__switcher {
   position: absolute;
-  top: 28px;
+  top: 22px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 26px;
+  gap: 14px;
   align-items: center;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.18);
   z-index: 5;
   -webkit-tap-highlight-color: transparent;
 }
@@ -64,37 +71,34 @@
   position: relative;
   background: transparent;
   border: 0;
-  padding: 6px 4px 10px;
+  padding: 6px 6px 10px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
   outline: none;
-  font-weight: 300;
-  letter-spacing: 0;
-  // Color comes from inline style (theme-driven). 22px gives Arabic and
-  // Devanagari enough room while keeping CJK readable.
-  font-size: 22px;
-  line-height: 1;
-  transition: color 350ms ease, opacity 350ms ease;
+  // Cream icon color — works on the frosted dark pill regardless of theme
+  color: rgba(232, 236, 226, 0.50);
+  line-height: 0;
+  transition: color 320ms ease;
+  &:hover { color: rgba(232, 236, 226, 0.78); }
+}
+
+.wc__sw-icon {
+  display: block;
 }
 
 .wc__sw--active {
-  // Tiny dot underneath the active glyph — color set via --wc-dot var inline
+  color: rgba(248, 250, 240, 0.96);
+  // Tiny dot underneath the active icon
   &::after {
     content: '';
     position: absolute;
     bottom: 0;
     left: 50%;
     transform: translateX(-50%);
-    width: 3px;
-    height: 3px;
+    width: 4px;
+    height: 4px;
     border-radius: 50%;
-    background: var(--wc-dot, rgba(232, 238, 226, 0.7));
-    transition: background 350ms ease;
+    background: rgba(248, 250, 240, 0.88);
   }
-}
-
-.wc__sw-glyph {
-  // Allow each glyph to use the per-button font set inline
-  display: inline-block;
 }
