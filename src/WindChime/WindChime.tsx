@@ -1919,13 +1919,16 @@ function drawStriker(ctx: CanvasRenderingContext2D, s: Striker, windForce = 0) {
       ctx.stroke();
       return;
     }
-    // Bow magnitude — proportional to wind force * length, capped so it
-    // never looks rubbery. Sign of `force` decides which side bulges.
-    // We push the bow always in the direction of horizontal wind, i.e.
-    // along the world-x axis, irrespective of the cord's tilt.
-    const bow = Math.max(-1, Math.min(1, force * 0.55)) * len * 0.10;
+    // Bow magnitude — proportional to wind force × cord length, with a
+    // hard cap so it can't look rubbery during peak gusts. Sign follows
+    // the wind direction so the cord bulges leftward in left-blowing
+    // wind and rightward in right-blowing wind.
+    const FACTOR = 0.25;                       // bow per unit (force × length)
+    const MAX_BOW = len * 0.30;                // cap at 30% of cord length
+    const raw = force * len * FACTOR;
+    const bow = Math.max(-MAX_BOW, Math.min(MAX_BOW, raw));
     const midX = (ax + bx) / 2 + bow;          // bow in world-horizontal
-    const midY = (ay + by) / 2 + Math.abs(bow) * 0.18;  // tiny droop along with bow
+    const midY = (ay + by) / 2 + Math.abs(bow) * 0.20;  // small droop along with bow
     ctx.beginPath();
     ctx.moveTo(ax, ay);
     ctx.quadraticCurveTo(midX, midY, bx, by);
