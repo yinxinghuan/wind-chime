@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { Moon, Sunset, Sun } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import './WindChime.less';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,11 +55,9 @@ interface SkyStops { top: string; mid: string; bottom: string }
 
 interface ThemeConfig {
   id: ThemeId;
-  // Switcher icon — drawn as inline SVG path inside a frosted pill at the
-  // top of the screen. We use a time-of-day icon (moon / sunset / sun) so
-  // the user reads it intuitively rather than as a foreign letter.
-  iconSvgPath: string;                 // path data for a 24×24 viewBox
-  iconStyle: 'fill' | 'stroke';
+  // Switcher icon — Lucide React component (consistent stroke style across
+  // moon / sunset / sun).
+  Icon: LucideIcon;
   // Pitch + shape — distinct per theme so each instrument feels physically
   // different in addition to sounding different.
   freqs: number[];                     // one frequency per chime (length CHIME_COUNT)
@@ -100,9 +100,7 @@ const THEMES: Record<ThemeId, ThemeConfig> = {
   // ── BRASS — moonlit night, aged-brass tubes (the original) ─────────────────
   brass: {
     id: 'brass',
-    // Crescent moon — filled curve made by overlapping two arcs
-    iconSvgPath: 'M16.5 4a8 8 0 1 0 4 14.7A10 10 0 0 1 16.5 4z',
-    iconStyle: 'fill',
+    Icon: Moon,
     // G3..Bb4 — medium brass range (the original)
     freqs: [...PENTA_BASE],
     // Slim & tall — graceful metal cathedral feel
@@ -147,9 +145,7 @@ const THEMES: Record<ThemeId, ThemeConfig> = {
   // ── CERAMIC — soft dusk, white porcelain with crackle ──────────────────────
   ceramic: {
     id: 'ceramic',
-    // Sun on horizon — half-circle with a horizontal line
-    iconSvgPath: 'M3 18h18M6 18a6 6 0 0 1 12 0',
-    iconStyle: 'stroke',
+    Icon: Sunset,
     // G4..Bb5 — one octave UP from brass; porcelain doesn't ring at low
     // frequencies (think small teacup tap, not a bell).
     freqs: PENTA_BASE.map(f => f * 2),
@@ -198,9 +194,7 @@ const THEMES: Record<ThemeId, ThemeConfig> = {
   // ── BAMBOO — bright daytime, hollow bamboo segments ────────────────────────
   bamboo: {
     id: 'bamboo',
-    // Sun with rays — circle + 8 short rays
-    iconSvgPath: 'M12 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12zM12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5',
-    iconStyle: 'stroke',
+    Icon: Sun,
     // G2..Bb3 — one octave DOWN from brass; long hollow bamboo gives a
     // deep wooden thump (think suikinkutsu / shakuhachi register).
     freqs: PENTA_BASE.map(f => f * 0.5),
@@ -392,8 +386,10 @@ export default function WindChime() {
     fadeAmbientPads(next, 700);
     setTheme(next);  // re-render so the switcher highlights correctly
   };
-  // Wind = Perlin-ish low-frequency noise used as ambient angular impulse.
-  const windRef = useRef({ phase: 0, gust: 0, gustUntil: 0 });
+  // Wind = layered noise: a slow weather envelope (calm ↔ windy over ~80 s),
+  // ambient noise scaled by that envelope, and short gusts that get
+  // stronger and more frequent during windy phases.
+  const windRef = useRef({ phase: 0, gust: 0, gustUntil: 0, weather: 0.5 });
   const lastTimeRef = useRef(performance.now());
   const [hasTouched, setHasTouched] = useState(false);
   const hasTouchedRef = useRef(false);
@@ -627,15 +623,30 @@ export default function WindChime() {
       const { w, h } = sizeRef.current;
       const chimes = chimesRef.current;
 
-      // ── Wind: slow Perlin-ish noise driving every chime gently ────────────
+      // ── Wind: layered envelope — slow "weather" cycle modulates how
+      // breezy the courtyard feels (calm → windy → calm over ~75 s),
+      // ambient noise oscillates at chime-frequency timescales, and short
+      // gusts punch through with much more amplitude during windy phases.
       const wind = windRef.current;
-      wind.phase += dt * 0.18;
-      // Occasional gust: ~every 6-12 seconds, lasts 1-2 seconds
-      if (now > wind.gustUntil && Math.random() < dt * 0.16) {
-        wind.gust = (Math.random() - 0.5) * 0.55;
-        wind.gustUntil = now + 900 + Math.random() * 1400;
+      wind.phase += dt * 0.22;
+      // Slow weather envelope — one full cycle every ~80s. Two beating
+      // sines so the cycle isn't perfectly periodic.
+      const weather =
+        0.55 + 0.40 * Math.sin(now * 0.000080 + 1.7)
+             + 0.20 * Math.sin(now * 0.000037 + 0.4);
+      const w01 = Math.max(0, Math.min(1, weather));   // 0..1, time spent in [0..0.2] feels calm, [0.7..1] feels windy
+      // Gust likelihood and strength both scale with the weather envelope.
+      // During calm phases gusts are rare and gentle; during windy phases
+      // they come in clusters and can swing tubes hard against the clamp.
+      const gustChance = dt * (0.10 + w01 * 0.45);
+      const gustPeak   = 0.50 + w01 * 0.95;            // up to ±1.45 at peak weather
+      if (now > wind.gustUntil && Math.random() < gustChance) {
+        wind.gust = (Math.random() - 0.5) * gustPeak;
+        wind.gustUntil = now + 600 + Math.random() * (1200 + w01 * 1500);
       }
-      if (now > wind.gustUntil) wind.gust *= Math.pow(0.5, dt * 2.2);
+      if (now > wind.gustUntil) wind.gust *= Math.pow(0.5, dt * 2.0);
+      // Stash for the per-chime ambient calc below
+      wind.weather = w01;
 
       // ── Update tube shape (length, radius) — lerped across theme fade ─────
       // Compute the active fade so we can update L/r before physics uses them.
@@ -658,9 +669,11 @@ export default function WindChime() {
       // ── Physics: each chime is a simple pendulum ──────────────────────────
       for (let i = 0; i < chimes.length; i++) {
         const c = chimes[i];
-        // Per-chime wind: low-frequency noise so they don't move in lockstep
-        const ambient = Math.sin(wind.phase * 1.0 + i * 0.7) * 0.08
-                      + Math.sin(wind.phase * 2.3 + i * 1.7) * 0.04;
+        // Per-chime wind: low-frequency noise so they don't move in lockstep,
+        // SCALED by the weather envelope so calm phases are nearly still.
+        const ambientBase = Math.sin(wind.phase * 1.0 + i * 0.7) * 0.10
+                          + Math.sin(wind.phase * 2.3 + i * 1.7) * 0.06;
+        const ambient = ambientBase * (0.20 + wind.weather * 1.65);
         const windAccel = (ambient + wind.gust * (0.7 + i * 0.05)) * WIND_FORCE_SCALE;
         const angAcc = -(GRAVITY / c.L) * Math.sin(c.angle)
                      - DAMPING * c.angVel
@@ -692,8 +705,9 @@ export default function WindChime() {
       // slowly. The wind acts more strongly on it (catcher leaf has surface).
       const striker = strikerRef.current;
       if (striker) {
-        const sAmbient = Math.sin(wind.phase * 0.7 + 4.2) * 0.12
-                       + Math.sin(wind.phase * 1.6 + 2.1) * 0.05;
+        const sAmbBase = Math.sin(wind.phase * 0.7 + 4.2) * 0.14
+                       + Math.sin(wind.phase * 1.6 + 2.1) * 0.06;
+        const sAmbient = sAmbBase * (0.20 + wind.weather * 1.65);
         const sWind = (sAmbient + wind.gust * 1.1) * STRIKER_WIND_SCALE;
         const sAcc = -(GRAVITY / striker.L) * Math.sin(striker.angle)
                    - DAMPING * 0.7 * striker.angVel
@@ -1148,6 +1162,7 @@ export default function WindChime() {
           {THEME_ORDER.map(id => {
             const cfg = THEMES[id];
             const isActive = theme === id;
+            const IconCmp = cfg.Icon;
             return (
               <button
                 key={id}
@@ -1156,26 +1171,32 @@ export default function WindChime() {
                 onClick={(e) => { e.stopPropagation(); ensureAudio(); switchTheme(id); }}
                 aria-label={`${cfg.id} theme`}
               >
-                <svg
-                  className="wc__sw-icon"
-                  viewBox="0 0 24 24"
-                  width="22"
-                  height="22"
-                  aria-hidden="true"
-                >
-                  <path
-                    d={cfg.iconSvgPath}
-                    fill={cfg.iconStyle === 'fill' ? 'currentColor' : 'none'}
-                    stroke={cfg.iconStyle === 'stroke' ? 'currentColor' : 'none'}
-                    strokeWidth={cfg.iconStyle === 'stroke' ? 1.5 : 0}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+                <IconCmp size={20} strokeWidth={1.5} aria-hidden="true" />
               </button>
             );
           })}
         </div>
+      )}
+      {/* Tap the title to cycle to the next theme — secondary affordance */}
+      {!isPoster && (
+        <button
+          className="wc__title-tap"
+          aria-label="Cycle theme"
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            ensureAudio();
+            const idx = THEME_ORDER.indexOf(themeRef.current);
+            const next = THEME_ORDER[(idx + 1) % THEME_ORDER.length];
+            switchTheme(next);
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            ensureAudio();
+            const idx = THEME_ORDER.indexOf(themeRef.current);
+            const next = THEME_ORDER[(idx + 1) % THEME_ORDER.length];
+            switchTheme(next);
+          }}
+        />
       )}
       {!hasTouched && !isPoster && (
         <div className="wc__hint">tap a chime · breathe</div>

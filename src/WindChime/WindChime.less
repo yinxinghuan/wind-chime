@@ -32,6 +32,25 @@
   display: none;
 }
 
+// Invisible click target sitting over the canvas-rendered title (~h*0.83
+// area). Tapping cycles brass → ceramic → bamboo → brass.
+.wc__title-tap {
+  position: absolute;
+  // Vertical center at 83% of the container — match the canvas title.
+  top: calc(83% - 36px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 200px;
+  height: 90px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  z-index: 4;
+  outline: none;
+}
+
 .wc__brand {
   position: absolute;
   bottom: 22px;
