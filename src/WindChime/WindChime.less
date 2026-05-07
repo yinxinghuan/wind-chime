@@ -1,0 +1,47 @@
+.wc {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0a141c;
+  border-radius: 24px;
+  font-family: 'Cormorant Garamond', serif;
+  color: rgba(214, 222, 214, 0.7);
+}
+
+.wc__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+
+// Most UI is drawn on the canvas. The hint and brand are DOM only because
+// they need text-rendering nuance (italic, kerning) that's easier in CSS.
+.wc__hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  // Hidden — title + sub-hint are rendered on canvas with breath animation.
+  // This DOM element is kept only as a fallback / accessibility anchor.
+  display: none;
+}
+
+.wc__brand {
+  position: absolute;
+  bottom: 22px;
+  left: 22px;
+  font-family: 'Cormorant Garamond', serif;
+  font-style: italic;
+  font-weight: 300;
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  color: rgba(214, 222, 214, 0.28);
+  pointer-events: none;
+  text-transform: lowercase;
+}
